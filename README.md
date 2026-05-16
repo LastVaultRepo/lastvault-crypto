@@ -134,7 +134,7 @@ Decryption requires the same password — no password = no decryption
 
 ```bash
 # Clone the repository
-git clone https://github.com/LastVaultRepo/lastvault-crypto.git
+git clone https://github.com/mxaher/lastvault-crypto.git
 cd lastvault-crypto
 
 # Install dependencies (Bun recommended, npm also works)
