@@ -4,8 +4,8 @@ export function sanitizeInput(value: string, maxLength: number = 500): string {
   return stripped.trim().slice(0, maxLength)
 }
 
-export function sanitizePin(pin: string): string {
-  return pin.replace(/\D/g, '').slice(0, 8)
+export function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._\-() ]/g, '_').slice(0, 200)
 }
 
 export function isValidEmail(email: string): boolean {

@@ -1,8 +1,8 @@
 # LastVault — Cryptographic Core
 
 This repository contains the open-source cryptographic and security modules
-that power [LastVault](https://lastvault.online) — a secure digital asset
-registry with automatic beneficiary notification.
+that power [LastVault](https://lastvault.online) — a zero-knowledge encrypted
+digital legacy vault with a built-in dead-man's switch.
 
 We publish these modules publicly so that users, security researchers, and
 developers can independently verify how sensitive data is protected.
@@ -14,14 +14,26 @@ developers can independently verify how sensitive data is protected.
 LastVault asks users to store their most sensitive information —
 passwords, recovery keys, account numbers, and personal inheritance instructions.
 
-We believe that trust must be earned through transparency, not simply claimed.
-Publishing the cryptographic core allows anyone to verify that:
+Trust must be earned through transparency, not simply claimed. Publishing the
+cryptographic core allows anyone to independently verify:
 
-- **True zero-knowledge** — Your master password derives an AES-256-GCM key client-side via PBKDF2 (600,000 iterations). Secrets are encrypted **before** they ever reach our server
-- The server stores only ciphertext it cannot read — the encryption key is derived from your password in the browser, never transmitted
-- This module provides the **server-side defense-in-depth layer**, double-encrypting already client-encrypted data at rest
-- Encryption uses **AES-256-GCM** with random 96-bit IVs — authenticated encryption with tamper detection
-- We are architecturally incapable of reading your secrets
+- **Client-side encryption (true zero-knowledge)** — Your password derives an
+  AES-256-GCM key in your browser via PBKDF2 (600,000 iterations, SHA-256).
+  Secrets are encrypted **before they ever leave your device**. The server
+  stores only ciphertext it cannot read.
+- **Server-side defense-in-depth** — The operator's `ENCRYPTION_KEY`
+  re-encrypts already client-encrypted data at rest. This is an additional
+  layer; the primary protection is the client-derived key which the server
+  never has access to.
+- **Non-extractable key** — The client-derived `CryptoKey` is stored in memory
+  with `extractable: false`. It cannot be exported, serialized, or stolen via
+  XSS. It is cleared on tab close or logout.
+- **Timing-safe comparisons** — All PIN/password verification uses
+  constant-time comparison to prevent timing attacks.
+- **Authenticated encryption (AES-256-GCM)** — Tampering with ciphertext is
+  detected, not just silently decrypted to garbage.
+- **Random IV per operation** — The same plaintext produces different
+  ciphertext every time, preventing correlation attacks.
 
 ---
 
@@ -29,183 +41,144 @@ Publishing the cryptographic core allows anyone to verify that:
 
 ```
 lastvault-crypto/
-├── README.md                ← This file
+├── README.md
 ├── LICENSE                  ← MIT License
 ├── SECURITY.md              ← Responsible disclosure process
+├── package.json
+├── tsconfig.json
+├── vitest.config.ts
 ├── src/
-│   ├── crypto.ts            ← Server-side AES-256-GCM (defense-in-depth layer)
-│   ├── vault-crypto.ts      ← Client-side password-derived vault encryption (PBKDF2 + AES-256-GCM)
-│   ├── file-crypto.ts       ← File attachment encryption module
+│   ├── helpers.ts           ← Hex/base64 encoding, timing-safe comparison
+│   ├── crypto.ts            ← AES-256-GCM encrypt/decrypt + PBKDF2 PIN hashing
+│   ├── file-crypto.ts       ← File attachment AES-256-GCM encrypt/decrypt
+│   ├── vault-crypto.ts      ← Client-side password-derived vault encryption
 │   └── sanitize.ts          ← Input sanitization and validation
-├── tests/
-│   └── crypto.test.ts       ← Full test suite (Vitest)
-└── package.json
+└── tests/
+    └── crypto.test.ts       ← Full test suite (Vitest)
 ```
 
 ---
 
-## What This Repository Contains
+## What Each Module Does
 
 | File | Purpose |
 |------|---------|
-| `src/crypto.ts` | Server-side AES-256-GCM encrypt/decrypt using the operator-managed ENCRYPTION_KEY. Acts as defense-in-depth — double-encrypts data that is already client-encrypted before storage. |
-| `src/vault-crypto.ts` | Client-side password-derived encryption for vault export/import using PBKDF2 (600,000 iterations) + AES-256-GCM. The same algorithm is used in production for all asset-level encryption. |
-| `src/file-crypto.ts` | File/attachment encryption using AES-256-GCM with random IV per file. |
-| `src/sanitize.ts` | Input sanitization, PIN formatting, and email validation applied to all user input. |
-| `tests/crypto.test.ts` | End-to-end test suite covering encryption round-trips, PIN hashing, tamper detection, and random IV verification. |
+| `helpers.ts` | Hex↔bytes, base64↔bytes, constant-time equality comparison (`timingSafeEqual`) |
+| `crypto.ts` | Server-side AES-256-GCM using operator-managed `ENCRYPTION_KEY`. PBKDF2-based PIN hashing (600k iterations) with timing-safe verification. Supports salted (current) and legacy SHA-256 (deprecated) hash formats. |
+| `file-crypto.ts` | File attachment AES-256-GCM — random IV prepended to ciphertext, embedded in the returned `ArrayBuffer`. |
+| `vault-crypto.ts` | **Client-side encryption core.** `deriveKey()` runs PBKDF2(600k iterations, SHA-256) with the user's password and a random salt to produce a non-extractable AES-256-GCM `CryptoKey`. `encryptSecret()`/`decryptSecret()` operate on individual field values. |
+| `sanitize.ts` | Input sanitization (HTML strip, length limit), filename sanitization, and email validation. |
 
 ---
 
-## What This Repository Does NOT Contain
+## Encryption Architecture
 
-This is not the full application. The following are intentionally excluded:
-
-- Application routes and business logic
-- Authentication session handling
-- Email notification templates
-- UI components and frontend code
-- Database query logic
-- Infrastructure configuration
-- **Client-side crypto module** (`client-crypto.ts`) — that lives in the main app and derives the user's key from their password. This repo contains the server-side crypto that operates on already-client-encrypted data.
-
-We open-source the security-critical modules only.
-The product code remains private to prevent trivial cloning.
-
----
-
-## How the Encryption Works
-
-### Zero-Knowledge Architecture (Client + Server)
+### Client-Side (True Zero-Knowledge)
 
 ```
 User enters master password at login
          ↓
 Browser derives AES-256-GCM key via PBKDF2 (600k iterations, SHA-256)
-with a fresh random salt stored in the User table
+with fresh random 128-bit salt stored in the User table
          ↓
-Key stored in sessionStorage (cleared on tab close or logout)
+Key stored as non-extractable CryptoKey in memory
+  — never writable to sessionStorage, localStorage, or IndexedDB
+  — cleared on tab close, logout, or auto-lock
          ↓
-When creating an asset, the browser encrypts the secret client-side:
-  encryptSecret(plaintext, derivedKey) → base64(iv + ciphertext)
+When creating an asset, browser encrypts each secret field:
+  encryptSecret(plaintext, key) → base64(randomIV + ciphertext)
          ↓
-The already-encrypted blob is sent to the server over TLS 1.3
-         ↓
-Server re-encrypts with its own ENCRYPTION_KEY (defense-in-depth):
-  serverEncrypt(clientCiphertext) → double-encrypted blob
-         ↓
-Double-encrypted blob stored in D1 database
-         ↓
-┌─────────────────────────────────────────────────────┐
-│  Only the browser can decrypt. The server sees only  │
-│  the outer encryption layer and never has access to  │
-│  the client-derived key or the plaintext.            │
-└─────────────────────────────────────────────────────┘
+Already-encrypted blob sent to server over TLS 1.3
 ```
 
-### Server-Side Encryption (this repo — crypto.ts)
+### Server-Side (Defense-in-Depth)
 
 ```
 Client-encrypted blob arrives over TLS 1.3
          ↓
-AES-256-GCM encryption runs server-side using Web Crypto API
+Server re-encrypts with ENCRYPTION_KEY (operator-managed 256-bit hex key):
+  encrypt(clientCiphertext) → base64(randomIV + ciphertext)
          ↓
-A fresh random 96-bit IV is generated for every single encryption call
+Double-encrypted blob stored in D1 database
          ↓
-The encryption key is derived from ENCRYPTION_KEY env variable
-via crypto.subtle.importKey — this key is operator-managed
+On read: server decrypts its layer → returns client-encrypted blob to browser
          ↓
-IV + ciphertext are combined and base64-encoded
-         ↓
-Only the base64-encoded ciphertext is stored in the database
-         ↓
-On read: server decrypts its layer, returns client-encrypted blob to browser
-         ↓
-Browser decrypts the inner layer with the user's derived key
+Browser decrypts inner layer with user's derived key
 ```
 
-### Vault Data Encryption (vault-crypto.ts)
-
-Used for encrypted vault exports and imports (and the same algorithm powers
-the in-app client-side encryption):
+### File Encryption
 
 ```
-Data to protect + password provided
+Original file bytes
          ↓
-Fresh 16-byte salt + 12-byte IV generated
+AES-256-GCM with random 96-bit IV
          ↓
-PBKDF2 derives a 256-bit AES-GCM key from the password + salt
-(600,000 iterations, SHA-256 — OWASP 2023 recommended minimum)
+IV + ciphertext combined into single ArrayBuffer
          ↓
-AES-256-GCM encrypts the data
+Stored in Cloudflare R2 object storage
          ↓
-salt + IV + ciphertext combined and base64-encoded
-         ↓
-Decryption requires the same password — no password = no decryption
+On download: IV extracted from first 12 bytes, rest decrypted in browser
 ```
+
+---
+
+## Key Properties
+
+| Property | Implementation |
+|----------|---------------|
+| **Cipher** | AES-256-GCM (authenticated encryption) |
+| **Key derivation** | PBKDF2-SHA256, 600,000 iterations (OWASP 2023 recommended minimum) |
+| **Salt** | 128-bit random, unique per user |
+| **IV** | 96-bit random, unique per encryption operation |
+| **Client key** | Non-extractable `CryptoKey` — cannot be exported/serialized |
+| **PIN comparison** | Timing-safe XOR loop — no short-circuit on mismatch |
+| **Error handling** | `DecryptionError` thrown on tampered/malformed ciphertext |
+| **Server key** | 256-bit hex from `ENCRYPTION_KEY` env var |
 
 ---
 
 ## Running the Tests
 
 ```bash
-# Clone the repository
-git clone https://github.com/mxaher/lastvault-crypto.git
+git clone https://github.com/LastVaultRepo/lastvault-crypto.git
 cd lastvault-crypto
-
-# Install dependencies (Bun recommended, npm also works)
-bun install
-# or: npm install
-
-# Run the full test suite
-bun run test
-# or: npx vitest
+bun install    # or npm install
+bun run test   # or npx vitest
 ```
 
-All tests use the Web Crypto API and are designed to run in a
-Cloudflare Workers-compatible environment via Vitest.
+Expected output (all passing):
 
-Expected output:
 ```
 ✓ crypto > encrypt then decrypt returns original
 ✓ crypto > handles empty string
-✓ crypto > returns error marker for tampered ciphertext
-✓ crypto > hashPin produces salted hash in format saltHex:hashHex
-✓ crypto > verifyPin returns true for correct pin
-✓ crypto > verifyPin returns false for wrong pin
+✓ crypto > throws DecryptionError for tampered ciphertext
+✓ crypto > throws DecryptionError for corrupted data
 ✓ crypto > encrypt returns different output each time (random IV)
+✓ pin hashing > hashPin produces salted hash in format saltHex:hashHex
+✓ pin hashing > verifyPin returns true for correct pin
+✓ pin hashing > verifyPin returns false for wrong pin
+✓ pin hashing > isSaltedPinHash detects correct format
+✓ pin hashing > isLegacyPinHash detects SHA-256 hex
+✓ vault crypto > generateSalt produces hex string
+✓ vault crypto > encryptSecret then decryptSecret round-trips
+✓ vault crypto > encryptSecret produces different output each time
+✓ vault crypto > wrong password fails to decrypt
+✓ file crypto > encryptFile then decryptFile round-trips
+✓ file crypto > produces different output each time
+✓ sanitize > strips HTML tags
+✓ sanitize > respects max length
+✓ sanitize > sanitizeFilename removes special chars
+✓ sanitize > isValidEmail validates correctly
+✓ helpers > hexToBytes converts correctly
+✓ helpers > timingSafeEqual compares correctly
 ```
-
----
-
-## Security Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| AES-256-GCM | Authenticated encryption — detects tampering, not just decryption errors |
-| Random IV per operation | Prevents ciphertext correlation across identical plaintext values |
-| PBKDF2 at 600,000 iterations | OWASP 2023 recommended minimum for SHA-256 based PBKDF2 |
-| Random salt per user | Stored in User table, used for client-side key derivation |
-| Client-side key derivation | The server never has access to the user's password or derived key — true zero-knowledge |
-| Double encryption | Server's ENCRYPTION_KEY provides defense-in-depth at rest |
-| Web Crypto API only | No third-party crypto libraries — relies on browser/runtime native implementation |
-| Secrets never in logs | Enforced at application level — no decrypted values appear in any log output |
 
 ---
 
 ## Security
 
-We take responsible disclosure seriously.
-
-If you discover a vulnerability in these modules or in the LastVault
-application, please do **not** open a public GitHub issue.
-
-**Email:** security@lastvault.online
-**Response commitment:** We will acknowledge your report within 48 hours
-and provide a resolution timeline within 7 days.
-
-We will credit researchers who report valid vulnerabilities, with their permission.
-
-Full details: [SECURITY.md](./SECURITY.md)
+**Responsible disclosure:** security@lastvault.online
+We acknowledge reports within 48 hours. Full policy in [SECURITY.md](./SECURITY.md).
 
 ---
 
@@ -217,8 +190,7 @@ MIT — see [LICENSE](./LICENSE)
 
 ## About LastVault
 
-LastVault is a secure digital asset registry with true zero-knowledge
-encryption. Your master password derives the encryption key in your browser —
-the server stores only encrypted blobs it cannot read.
-
-**[lastvault.online](https://lastvault.online)**
+[lastvault.online](https://lastvault.online) — A zero-knowledge encrypted
+digital legacy vault with a built-in dead-man's switch. Your password derives
+your encryption key in your browser. The server stores only ciphertext it
+cannot read.

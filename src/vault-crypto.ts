@@ -1,4 +1,7 @@
-export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+const PBKDF2_ITERATIONS = 600000
+
+export async function deriveKey(password: string, saltHex: string): Promise<CryptoKey> {
+  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map(b => parseInt(b, 16)))
   const encoder = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey(
     'raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']
@@ -7,7 +10,7 @@ export async function deriveKey(password: string, salt: Uint8Array): Promise<Cry
     {
       name: 'PBKDF2',
       salt: salt.buffer as ArrayBuffer,
-      iterations: 100000,
+      iterations: PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
     keyMaterial,
@@ -17,30 +20,29 @@ export async function deriveKey(password: string, salt: Uint8Array): Promise<Cry
   )
 }
 
-export async function encryptVaultData(data: string, password: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16))
+export async function encryptSecret(plaintext: string, key: CryptoKey): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const key = await deriveKey(password, salt)
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv }, key, new TextEncoder().encode(data)
-  )
-  const combined = new Uint8Array(salt.length + iv.length + new Uint8Array(encrypted).length)
-  combined.set(salt)
-  combined.set(iv, salt.length)
-  combined.set(new Uint8Array(encrypted), salt.length + iv.length)
+  const encoded = new TextEncoder().encode(plaintext)
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded)
+  const combined = new Uint8Array(iv.length + new Uint8Array(ciphertext).length)
+  combined.set(iv)
+  combined.set(new Uint8Array(ciphertext), iv.length)
   let binary = ''
   for (let i = 0; i < combined.length; i++) binary += String.fromCharCode(combined[i])
   return btoa(binary)
 }
 
-export async function decryptVaultData(encoded: string, password: string): Promise<string> {
+export async function decryptSecret(encoded: string, key: CryptoKey): Promise<string> {
   const binary = atob(encoded)
   const combined = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) combined[i] = binary.charCodeAt(i)
-  const salt = combined.slice(0, 16)
-  const iv = combined.slice(16, 28)
-  const data = combined.slice(28)
-  const key = await deriveKey(password, salt)
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+  const iv = combined.slice(0, 12)
+  const ciphertext = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
   return new TextDecoder().decode(decrypted)
+}
+
+export function generateSalt(): string {
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('')
 }

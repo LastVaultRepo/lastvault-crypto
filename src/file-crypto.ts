@@ -1,62 +1,29 @@
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-  }
-  return bytes
-}
+import { hexToBytes, bytesToBase64 } from './helpers'
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
-}
-
-function getKey(): Promise<CryptoKey> {
-  if (!process.env.ENCRYPTION_KEY) {
-    throw new Error('ENCRYPTION_KEY environment variable is required')
-  }
-  const keyBytes = hexToBytes(process.env.ENCRYPTION_KEY!)
+async function getKey(): Promise<CryptoKey> {
+  const key = process.env.ENCRYPTION_KEY
+  if (!key) throw new Error('ENCRYPTION_KEY environment variable is required')
+  const keyBytes = hexToBytes(key)
   return crypto.subtle.importKey(
-    'raw',
-    keyBytes.buffer as ArrayBuffer,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt', 'decrypt']
+    'raw', keyBytes.buffer as ArrayBuffer,
+    { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
   )
 }
 
-export async function encryptFile(data: ArrayBuffer): Promise<{ encrypted: ArrayBuffer; iv: string }> {
+export async function encryptFile(data: ArrayBuffer): Promise<ArrayBuffer> {
   const key = await getKey()
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    data
-  )
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data)
   const combined = new Uint8Array(iv.length + new Uint8Array(ciphertext).length)
   combined.set(iv)
   combined.set(new Uint8Array(ciphertext), iv.length)
-  return { encrypted: combined.buffer as ArrayBuffer, iv: bytesToBase64(iv) }
+  return combined.buffer as ArrayBuffer
 }
 
-export async function decryptFile(encrypted: ArrayBuffer, ivBase64: string): Promise<ArrayBuffer> {
+export async function decryptFile(encrypted: ArrayBuffer): Promise<ArrayBuffer> {
   const key = await getKey()
-  const expectedIv = base64ToBytes(ivBase64)
-  return crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: new Uint8Array(expectedIv) },
-    key,
-    encrypted
-  )
+  const buf = new Uint8Array(encrypted)
+  const iv = buf.slice(0, 12)
+  const ciphertext = buf.slice(12)
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
 }

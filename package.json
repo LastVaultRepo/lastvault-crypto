@@ -1,7 +1,7 @@
 {
   "name": "lastvault-crypto",
-  "version": "0.1.0",
-  "description": "Open-source cryptographic core of Digital Legacy Vault — AES-256-GCM encryption and PBKDF2 PIN hashing for Cloudflare Workers",
+  "version": "0.2.0",
+  "description": "Open-source cryptographic core of LastVault — AES-256-GCM client-side encryption, PBKDF2 key derivation, timing-safe PIN hashing, and file encryption for Cloudflare Workers",
   "type": "module",
   "scripts": {
     "test": "vitest run",
@@ -13,17 +13,20 @@
     "typescript": "^5.0.0"
   },
   "keywords": [
-    "encryption",
     "aes-256-gcm",
     "pbkdf2",
+    "client-side-encryption",
+    "zero-knowledge",
+    "web-crypto-api",
     "cloudflare-workers",
-    "web-crypto",
     "digital-legacy",
-    "zero-knowledge"
+    "dead-mans-switch",
+    "encryption",
+    "timing-safe"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mxaher/lastvault-crypto"
+    "url": "https://github.com/LastVaultRepo/lastvault-crypto"
   }
 }
